@@ -5,6 +5,7 @@ const { route, compareRoutes, declarative, text, bytes, unsupported } = require(
 
 class App {
   constructor(options = {}, ssl = false) {
+    if (ssl && options.ssl_ciphers !== undefined) unsupported('TLS cipher restrictions');
     this.appOptions = options;
     this.ssl = ssl;
     this.routes = [];
@@ -21,8 +22,10 @@ class App {
     return this;
   }
   ws(pattern, behavior) {
+    if (behavior.maxLifetime) unsupported('WebSocket maxLifetime');
+    if (behavior.dropped) unsupported('WebSocket dropped callbacks');
     const existing = this.websockets[0]?.handler;
-    for (const key of ['compression', 'idleTimeout', 'maxBackpressure', 'closeOnBackpressureLimit']) {
+    for (const key of ['compression', 'idleTimeout', 'maxBackpressure', 'closeOnBackpressureLimit', 'maxPayloadLength', 'sendPingsAutomatically']) {
       if (existing && existing[key] !== behavior[key]) throw new Error(`Bun requires uniform WebSocket ${key} across routes`);
     }
     this.websockets.push(route(pattern, behavior, 'GET', this.order++));
@@ -73,7 +76,8 @@ class App {
         idleTimeout: behavior.idleTimeout ?? 120,
         backpressureLimit: behavior.maxBackpressure ?? 64 * 1024,
         closeOnBackpressureLimit: behavior.closeOnBackpressureLimit ?? false,
-        maxPayloadLength: Math.max(...this.websockets.map(candidate => candidate.handler.maxPayloadLength ?? 16 * 1024)),
+        maxPayloadLength: behavior.maxPayloadLength ?? 16 * 1024,
+        sendPings: behavior.sendPingsAutomatically ?? true,
       };
     }
     if (this.ssl) {
@@ -81,13 +85,15 @@ class App {
       result.tls = { key: Bun.file(text(this.appOptions.key_file_name)), cert: Bun.file(text(this.appOptions.cert_file_name)) };
       if (this.appOptions.ca_file_name) result.tls.ca = Bun.file(text(this.appOptions.ca_file_name));
       if (this.appOptions.passphrase) result.tls.passphrase = text(this.appOptions.passphrase);
+      if (this.appOptions.dh_params_file_name) result.tls.dhParamsFile = text(this.appOptions.dh_params_file_name);
+      if (this.appOptions.ssl_prefer_low_memory_usage !== undefined) result.tls.lowMemoryMode = Boolean(this.appOptions.ssl_prefer_low_memory_usage);
     }
     return result;
   }
   listen(...args) {
     const callback = args.pop();
     if (typeof callback !== 'function') throw new TypeError('A listen callback is required');
-    const hostname = typeof args[0] === 'string' ? args.shift() : '0.0.0.0';
+    const hostname = typeof args[0] === 'number' ? '0.0.0.0' : text(args.shift());
     const port = args.shift();
     let server;
     try {
@@ -109,6 +115,7 @@ class App {
   }
   close() { for (const server of this.servers) server.stop(true); this.servers.clear(); return this; }
   publish(topic, value, binary = false, compress = false) {
+    if (!bytes(value).byteLength) return unsupported('Empty WebSocket publications');
     if (!this.numSubscribers(topic)) return false;
     let sent = false;
     for (const server of this.servers) sent = server.publish(text(topic), binary ? bytes(value) : text(value), compress) !== 0 || sent;

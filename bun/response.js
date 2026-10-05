@@ -121,8 +121,11 @@ class HttpResponse {
   onDataV2(callback) {
     const length = this.request.headers.get('content-length');
     let remaining = length && /^\d+$/.test(length) ? BigInt(length) : (1n << 64n) - 1n;
+    let completed = false;
     return this.onData((chunk, last) => {
+      if (completed) return;
       remaining = last ? 0n : remaining > BigInt(chunk.byteLength) ? remaining - BigInt(chunk.byteLength) : 0n;
+      completed = remaining === 0n;
       callback(chunk, remaining);
     });
   }
