@@ -16,6 +16,7 @@
  */
 
 module.exports = (() => {
+	if (process.versions.bun) return require('./bun');
 	try {
 		return require('./uws_' + process.platform + '_' + process.arch + '_' + process.versions.modules + '.node');
 	} catch (e) {
